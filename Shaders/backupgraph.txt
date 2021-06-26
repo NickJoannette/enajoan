@@ -1,0 +1,1163 @@
+#include <iostream>
+#include <chrono>
+#include <vector>
+#include <iterator>
+#include <glm/gtc/matrix_access.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <stack>
+#include "OpenGLWindow.h"
+#include "Shader.h"
+#include "UI_InputManager.h"
+#include "Camera.h"
+#include "Cube.h"
+#include "MarchingCubes.h"
+#include "Grid.h"
+#include "Line.h"
+#include "Sphere.h"
+#include "HierarchicalModel.h"
+#include "PhysicsUtilities.h"
+#include "Material.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+
+#include "stb_image.h"
+
+using namespace glm;
+using namespace PhysicsUtilities;
+
+// Constants for defining window size
+float SCR_WIDTH = 1024.0, SCR_HEIGHT = 768.0;
+const unsigned int SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
+
+// We keep track of the time between frames so that movement speed can be calculated independent of frame rate
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+
+// Create a new OpenGLWindow
+OpenGLWindow * mainWindow = new OpenGLWindow(SCR_WIDTH, SCR_HEIGHT);
+
+// Associate a GLFWindow
+GLFWwindow * mWind = mainWindow->glWindow();
+
+// Instantiate the camera at (0,30,90) so that all models and the grid are visible. 
+Camera camera(mainWindow, vec3(0, 0, 5));
+
+// Define the world matrix
+mat4 worldMatrix(1.0f);
+
+#pragma region Load shaders
+// Instantiate the shaders. The shader class takes care of loading them in and checking for compilation errors.
+Shader gridShader("../Shaders/gridShader.vs", "../Shaders/gridShader.fs");
+Shader sphereShader("../Shaders/sphereShader.vs", "../Shaders/sphereShader.fs");
+Shader cubeShader("../Shaders/cubeShader.vs", "../Shaders/cubeShader.fs");
+Shader lineShader("../Shaders/lineShader.vs", "../Shaders/lineShader.fs");
+Shader monoColorOutlineShader("../Shaders/monoColorOutlineShader.vs", "../Shaders/monoColorOutlineShader.fs");
+Shader lightCubeShader("../Shaders/lightCubeShader.vs", "../Shaders/lightCubeShader.fs");
+
+Shader debugDepthQuad("../Shaders/shadowDebugQuad.vs", "../Shaders/shadowDebugQuad.fs");
+Shader cubeDepthShader("../Shaders/cubeDepthShader.vs", "../Shaders/cubeDepthShader.fs", "../Shaders/cubeDepthShader.gs");
+Shader normalDisplayShader("../Shaders/normalDisplayShader.vs", "../Shaders/normalDisplayShader.fs", "../Shaders/normalDisplayShader.gs");
+
+Shader sandBoxShader("../Shaders/sandBoxShader.vs", "../Shaders/sandBoxShader.fs");
+#pragma endregion
+
+#pragma region Define materials
+// Define different material structs to use
+Material turquesa(0.1, 0.18725, 0.1745, 0.396, 0.74151, 0.69102, 0.297254, 0.30829, 0.306678, 0.1);
+Material esmeralda(0.0215, 0.1745, 0.0215, 0.07568, 0.61424, 0.07568, 0.633, 0.727811, 0.633, 0.6);
+Material jade(0.135, 0.2225, 0.1575, 0.54, 0.89, 0.63, 0.316228, 0.316228, 0.316228, 0.1);
+Material obsidian(0.05375, 0.05, 0.06625, 0.18275, 0.17, 0.22525, 0.332741, 0.328634, 0.346435, 0.3);
+Material gold(0.24725, 0.1995, 0.0745, 0.75164, 0.60648, 0.22648, 0.628281, 0.555802, 0.366065, 0.4);
+Material silver(0.19225, 0.19225, 0.19225, 0.50754, 0.50754, 0.50754, 0.508273, 0.508273, 0.508273, 0.4);
+Material Ruby(0.1745, 0.01175, 0.01175, 0.61424, 0.04136, 0.04136, 0.727811, 0.626959, 0.626959, 0.6);
+Material chrome(0.25, 0.25, 0.25, 0.4, 0.4, 0.4, 0.774597, 0.774597, 0.774597, 0.6);
+Material copper(0.19125, 0.0735, 0.0225, 0.7038, 0.27048, 0.0828, 0.256777, 0.137622, 0.086014, 0.1);
+Material tile(0.32, 0.32, 0.32, 0.55, 0.55, 0.55, 0.65, 0.65, 0.65, 0.5);
+Material blueRubber(0.0, 0.00, 0.05, 0.4, 0.4, 0.5, 0.04, 0.04, 0.7, .078125);
+
+#pragma endregion
+
+
+struct Vector8f {
+	vec3 pos, norm; vec2 tex;
+};
+
+
+
+
+Vector8f corners2[8] = {
+	Vector8f{vec3(-0.5, -0.5, -0.5), vec3(0, -1.0f, 0), vec2(0.0f, 0.0f)}, // Lower back left -- 0
+	Vector8f{vec3(0.5, -0.5, -0.5), vec3(0, -1.0f, 0), vec2(1.0f, 0.0f)}, // Lower back right -- 1
+	Vector8f{vec3(0.5, -0.5, 0.5),vec3(0, -1, 0), vec2(1.0f, 1.0f)}, // Lower front right -- 2
+	Vector8f{vec3(-0.5, -0.5, 0.5),vec3(0, -1, 0), vec2(0.0f, 1.0f)}, // Lower front left -- 3
+
+// ----- Top
+													 // Indices/IDs
+	Vector8f{vec3(-0.5, 0.5, -0.5),vec3(0, 1, 0), vec2(0.0f, 1.0f)}, // Upper back left -- 4
+	Vector8f{vec3(0.5, 0.5, -0.5),vec3(0, 1, 0), vec2(1.0f, 1.0f)}, // Upper back right -- 5
+	Vector8f{vec3(0.5, 0.5, 0.5),vec3(0, 1, 0), vec2(1.0f, 1.0f)}, // Upper front right -- 6
+	Vector8f{vec3(-0.5, 0.5, 0.5), vec3(0, 1, 0),vec2(0.0f, 1.0f)}, // Upper front left -- 7
+};
+GLuint vbo, vao;
+
+
+
+
+
+void handleWindowResize(UI_InputManager * UIM) {
+	/*
+	Handle logic for resizing
+*/
+	int width, height;
+	glfwGetWindowSize(mWind, &width, &height);
+	float aspectRatio = mainWindow->getAspectRatio();
+	float newRatio = height == 0 ? 0 : width / height; // handle div by zero bug
+
+	if (width >= height) {
+		width = height * aspectRatio;
+		UIM->xOffset = abs(width - UIM->prevWidth) / 2.0f;
+		UIM->yOffset = abs(height - UIM->prevHeight) / 2.0f;
+	}
+	else {
+		height = width / aspectRatio;
+		UIM->xOffset = abs(width - UIM->prevWidth) / 2.0f;
+		UIM->yOffset = abs(height - UIM->prevHeight) / 2.0f;
+	}
+
+	UIM->renderFrameHeight = height;
+	UIM->renderFrameWidth = width;
+
+	glViewport(UIM->xOffset, UIM->yOffset, width, height);
+
+}
+
+float mod289(float x) { return x - floor(x * (1.0f / 289.0f)) * 289.0f; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0f / 289.0f)) * 289.0f; }
+vec4 perm(vec4 x) { return mod289(((x * 34.0f) + 1.0f) * x); }
+
+float noise(vec3 p) {
+	vec3 a = floor(p);
+	vec3 d = p - a;
+	d = d * d * (3.0f - 2.0f * d);
+
+	vec4 b = vec4(a.x, a.x, a.y, a.y) + vec4(0.0, 1.0, 0.0, 1.0);
+	vec4 k1 = perm(vec4(b.x, b.y, b.x, b.y));
+	vec4 k2 = perm(vec4(k1.x, k1.y, k1.x, k1.y) + vec4(b.z, b.z, b.w, b.w));
+
+	vec4 c = k2 + vec4(a.z, a.z, a.z, a.z);
+	vec4 k3 = perm(c);
+	vec4 k4 = perm(c + 1.0f);
+
+	vec4 o1 = fract(k3 * (1.0f / 41.0f));
+	vec4 o2 = fract(k4 * (1.0f / 41.0f));
+
+	vec4 o3 = o2 * d.z + o1 * (1.0f - d.z);
+	vec2 o4 = vec2(o3.y, o3.w) * d.x + vec2(o3.x, o3.z) * (1.0f - d.x);
+
+	return o4.y * d.y + o4.x * (1.0 - d.y);
+}
+void genWeights(float * weightVals, mat4 * posMats, int w, int l, float seed) {
+	int cnt = 0;
+	for (int x = 0; x < w; ++x) {
+		for (int y = 0; y < l; ++y) {
+			for (int z = 0; z < l; ++z) {
+				mat4 r = worldMatrix * translate(mat4(1), vec3(-10 + 20 * x, -10 + 20 * y, -10 + 20 * z));
+				posMats[cnt] = r;
+				vec3 pos = r[3];
+				weightVals[cnt++] = noise(seed*pos);
+			}
+		}
+	}
+}
+// Method that loads the textures for the models generated in the world.
+void load2DTexture(unsigned int * textureID, std::string fileName, bool verticallyFlipped) {
+
+	glGenTextures(1, textureID);
+	glBindTexture(GL_TEXTURE_2D, *textureID);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	fileName.insert(0, "../Textures/");
+	const char * filePath = fileName.c_str();
+	int Texture_Width, Texture_Height, Texture_Nr_Chans;
+	stbi_set_flip_vertically_on_load(true);
+	unsigned char *Tile_Texture_Image_Data_Loaded = stbi_load(filePath, &Texture_Width, &Texture_Height, &Texture_Nr_Chans, STBI_rgb);
+	if (Tile_Texture_Image_Data_Loaded)
+	{
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, Texture_Width, Texture_Height, 0, GL_RGB, GL_UNSIGNED_BYTE, Tile_Texture_Image_Data_Loaded);
+		glGenerateMipmap(GL_TEXTURE_2D);
+	}
+	else
+	{
+		std::cout << "Failed to load texture" << std::endl;
+	}
+
+	stbi_image_free(Tile_Texture_Image_Data_Loaded);
+
+}
+
+// This is a function we created to sort the models based on their distance to the camera so that they are drawn in a way that their transparency and stencil outlines don't conflict
+void sortModelsByDistanceToCamera(std::vector<HierarchicalModel * > & v) {
+
+	int i, j;
+	for (i = 0; i < v.size() - 1; i++)
+
+		// Last i elements are already in place  
+		for (j = 0; j < v.size() - i - 1; j++)
+			if (length(v[j]->bubble.center - camera.Position) <= length(v[j + 1]->bubble.center - camera.Position)) {
+				HierarchicalModel * t = v[j];
+				v[j] = v[j + 1];
+				v[j + 1] = t;
+			}
+}
+
+// Function to render coordinate axes
+void drawCoordinateAxes(Line L, Shader S, GLint primitiveType, mat4 viewMatrix, mat4 projectionMatrix) {
+
+	// DRAW THE COORDINATE AXES
+	S.use();
+	S.setMat4("projection", projectionMatrix);
+	S.setMat4("world", worldMatrix);
+	S.setMat4("view", viewMatrix);
+	S.setMat4("transform", mat4(1.0f));
+
+	// Draw the Y axis vector line
+	S.setVec3("ourColor", vec3(0.0f, 1.0f, 0.0f));
+	L.Draw(primitiveType);
+
+	// Draw the X axis vector line
+	L.setTransform(rotate(*L.getTransformMatrix(), -radians(90.0f), vec3(0, 0, 1)));
+	S.setMat4("transform", *L.getTransformMatrix());
+	S.setVec3("ourColor", vec3(1.0f, 0.0f, 0.0f));
+	L.Draw(primitiveType);
+	L.resetTransform();
+
+	// Draw the Z axis vector line
+	L.setTransform(rotate(*L.getTransformMatrix(), radians(90.0f), vec3(1, 0, 0)));
+	S.setMat4("transform", *L.getTransformMatrix());
+	S.setVec3("ourColor", vec3(1.0f, 1.0f, 0.0f));
+	L.Draw(primitiveType);
+	L.resetTransform();
+
+}
+
+
+/*
+void drawGrid(Shader * S, GLint primitiveType, mat4 viewMatrix, mat4 projectionMatrix, mat4 worldMatrix, int diffuseTexture, unsigned int specularMap, unsigned int shadowMap,
+	vec3 lightPos, int heightMap, bool shadowingEnabled) {
+
+
+	// DRAW THE GRID
+	// We use the grid's shader and tell it the camera's current view matrix as well as the time,
+	// which is used for visual effects (coloring)
+
+	// Figure which grid we are drawing based on GUI input.
+	Grid * G;
+	switch (heightMap) {
+	case 0: {
+		G = &squareGrid;
+		break;
+	}
+	case 1: {
+		G = &heightMap128;
+		break;
+	}
+	case 2: {
+		G = &heightMap256;
+		break;
+	}
+	case 3: {
+		G = &heightMap512;
+		break;
+	}
+	case 4: {
+		G = &heightMap1024;
+		break;
+	}
+
+	default:
+		G = &squareGrid;
+		break;
+	}
+
+	// Send info to the specified shader
+
+	S->use();
+	S->setMat4("projection", projectionMatrix);
+	S->setMat4("world", worldMatrix);
+	S->setMat4("view", viewMatrix);
+	S->setMat4("model", worldMatrix * *G->getModelMatrix());
+	S->setVec3("color", vec3(0.215, 0.115, 0.05));
+	S->setInt("specular_map", 1);
+	S->setInt("shadowMap", 2);
+	S->setBool("shadowingEnabled", shadowingEnabled);
+	S->setVec3("lamp.position", lightPos);
+	S->setBool("heightMapped", heightMap > 0);
+
+	S->setVec3("viewPos", camera.GetPosition());
+	S->setBool("shadowingEnabled", shadowingEnabled);
+	S->setVec3("material.ambient", tile.getAmbient());
+	S->setVec3("material.diffuse", tile.getDiffuse());
+	S->setVec3("material.specular", tile.getSpecular());
+	S->setFloat("material.shininess", tile.getShininess());
+
+	// Draw
+	G->Draw(primitiveType, diffuseTexture, specularMap, shadowMap);
+}
+*/
+
+// Function to normalize the speed relative to framerate
+float normalizeSpeed(float FPS, float referenceFPS, float movementIncrement) {
+	float FPS_ratio = referenceFPS / FPS;
+	return FPS_ratio * movementIncrement;
+}
+float hash(float n) { return fract(sin(n) * 1e4); }
+float hash(vec2 p) { return fract(1e4 * sin(17.0 * p.x + p.y * 0.1) * (0.1 + abs(sin(p.y * 13.0 + p.x)))); }
+
+
+float noise(vec2 x) {
+	vec2 i = floor(x);
+	vec2 f = fract(x);
+
+	// Four corners in 2D of a tile
+	float a = hash(i);
+	float b = hash(i + vec2(1.0, 0.0));
+	float c = hash(i + vec2(0.0, 1.0));
+	float d = hash(i + vec2(1.0, 1.0));
+
+	// Simple 2D lerp using smoothstep envelope between the values.
+	// return vec3(mix(mix(a, b, smoothstep(0.0, 1.0, f.x)),
+	//			mix(c, d, smoothstep(0.0, 1.0, f.x)),
+	//			smoothstep(0.0, 1.0, f.y)));
+
+	// Same code, with the clamps in smoothstep and common subexpressions
+	// optimized away.
+	vec2 u = f * f * (3.0f- 2.0f * f);
+	return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+}
+void loadCubeDepthMap(unsigned int * depthMapFBO, unsigned int & depthCubeMap) {
+	glGenFramebuffers(1, depthMapFBO);
+
+
+	glBindTexture(GL_TEXTURE_CUBE_MAP, depthCubeMap);
+	for (unsigned int i = 0; i < 6; i++)
+		glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_DEPTH_COMPONENT,
+			SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BASE_LEVEL, 0);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, 0);
+
+	glBindFramebuffer(GL_FRAMEBUFFER, *depthMapFBO);
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, depthCubeMap, 0);
+	glDrawBuffer(GL_NONE);
+	glReadBuffer(GL_NONE);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+float * vertices;
+uint16_t vc = 0;
+
+vec3 MCResolution(20);
+
+void marchCubes(MarchingCubes &MC, float surfaceThreshold, bool faceNormals) {
+
+	auto  start = std::chrono::steady_clock::now();
+
+	vertices = new float[20 * 20 * 20 * 128];
+
+	float t = glfwGetTime();
+	float xMag = MCResolution.x;
+	float yMag = MCResolution.y;
+	float zMag = MCResolution.z;
+	uint16_t fvc = 0;
+
+	for (int x = -xMag/2; x < xMag/2; ++x) for (int y = -yMag/2; y < yMag/2; ++y) for (int z = -zMag/2; z < zMag/2; ++z) {
+		vec3 startPos(x, y, z);
+		uint8_t cubeIndex = 0;
+		float scalarValues[8];
+		for (int i = 0; i < 8; ++i) {
+			float nz = 3000*noise(startPos + corners2[i].pos);
+			scalarValues[i] = nz;
+			if (nz < surfaceThreshold)	cubeIndex |= 1 << i;
+		}
+
+		int * triangulation = MC.triTable[cubeIndex];
+		for (unsigned int i = 0; i < 16; ++i) {
+			int8_t edgeIndex = triangulation[i];
+			if (edgeIndex == -1) continue;
+			int indexA = MC.cornerIndexFromEdge[edgeIndex][0];
+			int indexB = MC.cornerIndexFromEdge[edgeIndex][1];
+
+			vec3 newPos = startPos + corners2[indexA].pos +
+				(surfaceThreshold - scalarValues[indexA]) * (corners2[indexB].pos - corners2[indexA].pos) / (scalarValues[indexB] - scalarValues[indexA]);
+			vec2 newTex = corners2[indexA].tex + (surfaceThreshold - scalarValues[indexA]) * (corners2[indexB].tex - corners2[indexA].tex) / (scalarValues[indexB] - scalarValues[indexA]);
+			vec3 newNorm(0);
+			vertices[vc * 8] = newPos.x; vertices[vc * 8 + 1] = newPos.y; vertices[vc * 8 + 2] = newPos.z;
+			vertices[vc * 8+3] = 0; vertices[vc * 8 + 4] = 0; vertices[vc * 8 + 5] = 0;
+			vertices[vc * 8+6] = 0; vertices[vc * 8 + 7] = 0; // for now, useless tex coords.
+
+			++vc;
+
+			if (vc % 3 == 0 && vc > 0) {
+				// Calculate face normal
+				float  v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z;
+				v1x = vertices[vc * 8 - 8], v1y = vertices[vc * 8 - 7], v1z = vertices[vc * 7 - 6];
+				v2x = vertices[(vc - 1) * 8 - 8], v2y = vertices[(vc - 1) * 8 - 7], v2z = vertices[(vc - 1) * 8 - 6];
+				v3x = vertices[(vc - 2) * 8 - 8], v3y = vertices[(vc - 2) * 8 - 7], v3z = vertices[(vc - 2) * 8 - 6];
+
+				// Cross product
+				float cx, cy, cz;
+
+				cx = (v3y - v1y) * (v2z - v1z) - (v3z - v1z) * (v2y - v1y);
+				cy = (v3x - v1x) * (v2z - v1z) - (v3z - v1z) * (v2x - v1x);
+				cz = (v3x - v1x) * (v2y - v1y) - (v3y - v1y) * (v2x - v1x);
+
+				float c2x, c2y, c2z;
+
+				c2x = (v1y - v2y) * (v3z - v2z) - (v1z - v2z) * (v3y - v2y);
+				c2y = (v1x - v2x) * (v3z - v2z) - (v1z - v2z) * (v3x - v2x);
+				c2z = (v1x - v2x) * (v3y - v2y) - (v1y - v2y) * (v3x - v2x);
+
+				glm::vec3 vec1(v3x - v2x, v3y - v2y, v3z - v2z);
+				glm::vec3 vec2(v1x - v2x, v1y - v2y, v1z - v2z);
+
+				glm::vec3 faceNormal = glm::cross(vec1, vec2);
+
+				// Set the normals retroactively
+				vertices[vc * 8 - 5] = faceNormal.x; vertices[vc * 8 - 4] = faceNormal.y; vertices[vc * 8 - 3] = faceNormal.z;
+				vertices[(vc - 1) * 8 - 5] = faceNormal.x; vertices[(vc - 1) * 8 - 4] = faceNormal.y; vertices[(vc - 1) * 8 - 3] = faceNormal.z;
+				vertices[(vc - 2) * 8 - 5] = faceNormal.x; vertices[(vc - 2) * 8 - 4] = faceNormal.y; vertices[(vc - 2) * 8 - 3] = faceNormal.z;
+			}
+		}
+
+	}
+
+	auto  end = std::chrono::steady_clock::now();
+
+	std::cout << "Time elapsed for " << vc << " ie. 20x20x20 generation: " << 
+		 std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count() << std::endl;
+
+	glGenBuffers(1, &vbo);
+	glGenVertexArrays(1, &vao);
+	glBindVertexArray(vao);
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	glBufferData(GL_ARRAY_BUFFER, vc * 8 * sizeof(float), vertices, GL_STATIC_DRAW);
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
+	glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(3 * sizeof(float)));
+	glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
+	//return MCVertices;
+}
+
+int main() {
+#pragma region Instantiate our resource and input managers
+	UI_InputManager UIM(mWind, &camera);
+
+#pragma endregion
+
+#pragma region Load textures
+	unsigned int diffuse1;
+	load2DTexture(&diffuse1, "LavaTexture_1.jpg", true);	
+	unsigned int diffuse2;
+	load2DTexture(&diffuse2, "NightSky.jpg", true);
+#pragma endregion
+
+#pragma region Set up ImGui and any variables it will be referencing.
+	// Setup Dear ImGui context
+	IMGUI_CHECKVERSION();
+	const char* glsl_version = "#version 330";
+
+	ImGui::CreateContext();
+	ImGuiIO& mainMenu = ImGui::GetIO(); (void)mainMenu;
+	mainMenu.IniFilename = NULL; // Get rid of the save file
+
+	// Setup Dear ImGui theme color
+	ImGui::StyleColorsDark();
+
+	// ------------- VALUES CONTROLLED BY THE GUI -------------------
+	ImGui_ImplGlfw_InitForOpenGL(mWind, true);
+	ImGui_ImplOpenGL3_Init(glsl_version);
+	bool show_demo_window = true;
+	bool show_another_window = false;
+	ImVec4 lightAmbient = ImVec4(0.539f,.539f,.539f,1.0f);
+	ImVec4 lightDiffuse = ImVec4(0.686f, 0.686f, 0.686f, 1.0f);
+	ImVec4 lightSpecular = ImVec4(0.029, 0.0f, 0.0f, 1.0f);
+	float far = 300.0f, near = 1.0f;
+	float lightIntensity = 300.0f;
+	float linear = 0.1770f; float linearZero, linearOne;
+	float quadratic = 0.1305f; float quadZero, quadOne;
+	float waveSpread = 10, waveMagnitude = 3;
+	float textureMovementX = 0, textureMovementZ = 0;
+	float heightScalingFactor = 1.0f;
+	int waveType = 0;
+	int heightMapResolution = 0;
+	float surfaceThreshold = 1620;
+	bool drawIndexed = false;
+	//////////////////////////////////////////////////////////////////
+#pragma endregion
+
+#pragma region FBO, texture for shadowing
+	unsigned int depthCubeMap;
+	glGenTextures(1, &depthCubeMap);
+	// CUBIC DEPTH MAP INSTANTIATION FOR THE POINT LIGHT SHADOWING
+	unsigned int depthMapFBO;
+	loadCubeDepthMap(&depthMapFBO, depthCubeMap);
+#pragma endregion
+
+#pragma region Create the unit "building block" meshes that we use for other things (cubes,spheres,etc.)
+	glm::mat4 u(1); // Unit matrix so we don't have to keep doing glm::mat4(1)
+
+					// Create the Line object for the coordinate axes - passing in the vertices for a line that is 5 units in length
+	Line lx(0.0f, 0.0f, 0.0f, 0.0f, 5.0f, 0.0f);
+	lineShader.use();
+	lineShader.setMat4("model", mat4(1.0f));
+
+
+	MarchingCubes MC;
+	// Create the identity cube that we will use to draw our models
+	Cube c;
+	Sphere uS;
+	mat4 PointLight_Transform(translate(vec3(15, 30, 30)));
+
+#pragma endregion
+
+
+
+
+	float weightVals[2 * 2 * 2];
+	mat4 posMats[2 * 2 * 2];
+	// Keep track of the 
+	float prevHeight = SCR_HEIGHT, prevWidth = SCR_WIDTH;
+	genWeights(weightVals, posMats, 2, 2, 1);
+
+
+
+
+
+
+
+
+
+
+
+
+
+	// Cube vertex nodes
+	vec3 nodes[8]{
+		vec3(-10,-10,-10),
+		vec3(10,-10,-10),
+		vec3(10,-10,10),
+		vec3(-10,-10,10),
+
+		vec3(-10,10,-10),
+		vec3(10,10,-10),
+		vec3(10,10,10),
+		vec3(-10,10,10)
+	};
+
+
+
+
+	// Cube vertex nodes
+	vec3 corners[8] = {
+		vec3(-1,-1,-1),
+		vec3(1,-1,-1),
+		vec3(1,-1,1),
+		vec3(-1,-1,1),
+
+		vec3(-1,1,-1),
+		vec3(1,1,-1),
+		vec3(1,1,1),
+		vec3(-1,1,1)
+	};
+
+
+
+	marchCubes(MC, surfaceThreshold, true);
+
+	int mcrX = MCResolution.x;
+	int mcrY = MCResolution.y;
+	int mcrZ = MCResolution.z;
+	bool faceNormals = true;
+	while (!glfwWindowShouldClose(mWind))
+	{
+#pragma region Define frame-specific constants
+		float FPS = ImGui::GetIO().Framerate;
+		float normalizedSpeed = normalizeSpeed(FPS, 60.0f, 0.001f);
+		float time = glfwGetTime();
+		GLint primitiveType = UIM.primitiveType;
+#pragma endregion
+		float oldST = surfaceThreshold;
+
+#pragma region Start and prep Dear ImGui
+		// Start Dear ImGui 
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplGlfw_NewFrame();
+		ImGui::NewFrame();
+
+		bool regen = false;
+		// Handle input from GUI to assign to relevant variables
+		static float lightX = 0, lightY = 10, lightZ = -10;
+		{
+			ImGui::Begin("Control GUI");
+			ImGui::SetWindowPos(ImVec2(0, 0), 2);
+			ImGui::SetWindowSize(ImVec2(ImGui::GetIO().DisplaySize.x / 4.0, ImGui::GetIO().DisplaySize.y / 2.0), 2);
+			ImGui::SetWindowCollapsed(true, 2);
+
+			if (ImGui::CollapsingHeader("Point Light")) {
+				ImGui::SliderFloat("Intensity", &lightIntensity, 0, 500.0f);
+
+				if (ImGui::TreeNode("Position")) {
+					ImGui::SliderFloat("Light X", &lightX, -150, 150);
+					ImGui::SliderFloat("Light Y", &lightY, -150, 150.0f);
+					ImGui::SliderFloat("Light Z", &lightZ, -150, 150.0f);
+					ImGui::TreePop();
+				}
+
+
+				if (ImGui::TreeNode("Color")) {
+					ImGui::ColorEdit3("Ambient", (float*)&lightAmbient);
+					ImGui::ColorEdit3("Diffuse", (float*)&lightDiffuse);
+					ImGui::ColorEdit3("Specular", (float*)&lightSpecular);
+					ImGui::TreePop();
+				}
+
+				if (ImGui::TreeNode("Attenuation")) {
+					ImGui::DragScalar("Linear", ImGuiDataType_Float, &linear, 0.005f, &linearZero, &linearOne, "%f", 2.0f);
+					ImGui::DragScalar("Quadratic", ImGuiDataType_Float, &quadratic, 0.005f, &quadZero, &quadOne, "%f", 2.0f);
+			
+					ImGui::TreePop();
+				}	
+				if (ImGui::TreeNode("Depth")) {
+					ImGui::SliderFloat("Far", &far, 0.0f, 500.0f);
+					ImGui::SliderFloat("Near", &near, 0.0f, 1.0f);
+					ImGui::TreePop();
+				}
+
+			}
+
+			if (ImGui::CollapsingHeader("Grid FX")) {
+				if (ImGui::TreeNode("Wave Function")) {
+					ImGui::PushItemWidth(120);
+					const char* items[] = { "None", "Perlin", "FBM x Perlin" };
+					ImGui::ListBox("", &waveType, items, IM_ARRAYSIZE(items));
+					ImGui::PopItemWidth();
+					ImGui::TreePop();
+				}
+
+				if (ImGui::TreeNode("Wave Properties")) {
+					ImGui::SliderFloat("Magnitude", &waveMagnitude, -10, 10);
+					ImGui::SliderFloat("Spread", &waveSpread, 1, 20);
+					ImGui::TreePop();
+				}
+
+				if (ImGui::TreeNode("Texture Speed")) {
+					ImGui::SliderFloat("X", &textureMovementX, -20, 20);
+					ImGui::SliderFloat("Z", &textureMovementZ, -20, 20);
+					ImGui::TreePop();
+				}
+
+				if (ImGui::TreeNode("Height Map")) {
+					ImGui::PushItemWidth(120);
+					const char* items[] = { "None", "128x128", "256x256", "512x512", "1024x1024" };
+					ImGui::ListBox("", &heightMapResolution, items, IM_ARRAYSIZE(items));
+					ImGui::PopItemWidth();
+					ImGui::PushItemWidth(70);
+					ImGui::SliderFloat("Height scaling factor", &heightScalingFactor, 0, 2);
+					ImGui::TreePop();
+				}
+			}
+
+
+			if (ImGui::CollapsingHeader("Metrics")) {
+				ImGui::Text("Metrics");
+				ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / FPS, FPS);
+			}
+
+
+			ImGui::End();
+			ImGuiWindowFlags window_flags = 0;
+			bool closeable = true;
+			window_flags |= ImGuiWindowFlags_NoTitleBar;
+			window_flags |= ImGuiWindowFlags_NoBackground;
+
+			ImGui::Begin("Marching Cubes GUI", &closeable, window_flags);
+			ImGui::SetWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - ImGui::GetIO().DisplaySize.x / 4.0f, 300), 2);
+			ImGui::SetWindowSize(ImVec2(400, 550));
+
+			ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(6 / 7.0, 0.5f, 0.5f));
+			ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(6 / 7.0f, 0.6f, 0.5f));
+			ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(6 / 7.0f, 0.7f, 0.5f));
+			ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(6 / 7.0f, 0.9f, 0.9f));
+			ImGui::VSliderFloat("##v", ImVec2(18, 360), &surfaceThreshold, 0.0f, 3000.0f, "");
+			if (ImGui::IsItemActive() || ImGui::IsItemHovered())
+				ImGui::SetTooltip("%.3f", surfaceThreshold);
+			if (surfaceThreshold != oldST) marchCubes(MC, surfaceThreshold, faceNormals);
+			ImGui::PopStyleColor(4);
+			ImGui::SliderInt("X", &mcrX, 0, 100.0f);
+
+			ImGui::SliderInt("Y", &mcrY, 0, 100.0f);
+
+			ImGui::SliderInt("Z", &mcrZ, 0, 100.0f);
+
+			if (ImGui::Button("Regen")) {
+				regen = !regen;
+				marchCubes(MC, surfaceThreshold, true);
+			}
+			if (ImGui::Button("Draw Indexed")) {
+				drawIndexed = !drawIndexed;
+			}
+
+			ImGui::End();
+
+
+		}
+		MCResolution.x = mcrX;
+		MCResolution.y = mcrY;
+		MCResolution.z = mcrZ;
+		// Make sure we arent zooming, panning, tilting when the user is clicking in the GUI window.
+		if (ImGui::GetIO().WantCaptureMouse && ImGui::GetIO().MouseClicked) {
+			UIM.modelsMoved = true;
+			UIM.hoveringOnGUI = true;
+		}
+		else UIM.hoveringOnGUI = false;
+
+#pragma endregion
+
+#pragma region Shadow calculations for changing world orientation
+
+
+		// Determine the light source dependent on the world matrix's rotation so that the shadows are determined relative to the world (not its rotated orientation)
+		float sX = length(vec3(worldMatrix[0]));
+		float sY = length(vec3(worldMatrix[1]));
+		float sZ = length(vec3(worldMatrix[2]));
+		mat4 w = worldMatrix;
+		mat4 rotMat{
+			w[0][0] / sX, w[0][1] / sY, w[0][2] / sZ,0,
+			w[1][0] / sX, w[1][1] / sY, w[1][2] / sZ,0,
+			w[2][0] / sX, w[2][1] / sY, w[2][2] / sZ,0,
+			0,0,0,1
+		};
+
+		vec3 shadowResult = rotMat * PointLight_Transform[3];
+#pragma endregion
+
+#pragma region SEND THE GUI-DETERMINED VALUES TO THE SHADERS
+
+		// Set the light source position to the chosen value in the GUI window
+		PointLight_Transform[3].x = lightX;
+		PointLight_Transform[3].y = lightY;
+		PointLight_Transform[3].z = lightZ;
+
+		// SEND LIGHT INFO TO CUBE SHADER
+		cubeShader.use();
+		cubeShader.setVec3("lamp.ambient", (lightIntensity/100.0f)*vec3(lightAmbient.x, lightAmbient.y, lightAmbient.z));
+		cubeShader.setVec3("lamp.diffuse", (lightIntensity / 100.0f)* vec3(lightDiffuse.x, lightDiffuse.y, lightDiffuse.z));
+		cubeShader.setVec3("lamp.specular", (lightIntensity / 100.0f)*vec3(lightSpecular.x, lightSpecular.y, lightSpecular.z));
+		cubeShader.setVec2("attenuation", vec2(linear, quadratic));
+
+		// SEND LIGHT INFO TO SPHERE SHADER
+		sphereShader.use();
+		sphereShader.setVec3("lamp.ambient", (lightIntensity / 100.0f)*vec3(lightAmbient.x, lightAmbient.y, lightAmbient.z));
+		sphereShader.setVec3("lamp.diffuse", (lightIntensity / 100.0f)*vec3(lightDiffuse.x, lightDiffuse.y, lightDiffuse.z));
+		sphereShader.setVec3("lamp.specular", (lightIntensity / 100.0f)*vec3(lightSpecular.x, lightSpecular.y, lightSpecular.z));
+		sphereShader.setVec2("attenuation", vec2(linear, quadratic));
+		// SEND LIGHT AND WAVE INFO TO GRID SHADER
+		gridShader.use();
+		gridShader.setFloat("waveSpread", waveSpread);
+		gridShader.setFloat("waveMagnitude", waveMagnitude);
+		gridShader.setInt("waveType", waveType);
+		gridShader.setFloat("textureMovementX", textureMovementX);
+		gridShader.setFloat("textureMovementZ", -textureMovementZ); // Send in the negative to match our world coordinate logic.
+		gridShader.setFloat("heightScalingFactor", heightScalingFactor);
+		gridShader.setVec3("lamp.ambient", vec3(lightAmbient.x, lightAmbient.y, lightAmbient.z));
+		gridShader.setVec3("lamp.diffuse", vec3(lightDiffuse.x, lightDiffuse.y, lightDiffuse.z));
+		gridShader.setVec3("lamp.specular", vec3(lightSpecular.x, lightSpecular.y, lightSpecular.z));
+		gridShader.setVec2("attenuation", vec2(linear, quadratic));
+
+#pragma endregion
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		/*
+		
+			SHADOW PASS
+		*/
+
+
+		/*
+	 Here we have to render the scene using a different projection and view matrix
+	 to simulate rendering from the light source's point of view. We use the 6 different perspectives to acheive point light shadowing
+	*/
+
+		float near_plane = 0.1f, far_plane = 300.0f;
+		mat4 lightProjection = perspective(radians(90.0f), 1.0f, near_plane, far_plane);
+
+		std::vector<mat4> pointShadowTransforms;
+		// Right
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(1.0, 0.0, 0.0), vec3(0.0, -1.0, 0.0)));
+		// Left
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(-1.0, 0.0, 0.0), vec3(0.0, -1.0, 0.0)));
+		// Top
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0)));
+		// Bottom
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(0.0, -1.0, 0.0), vec3(0.0, 0.0, -1.0)));
+		// Near
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(0.0, 0.0, 1.0), vec3(0.0, -1.0, 0.0)));
+		// Far
+		pointShadowTransforms.push_back(lightProjection * lookAt(shadowResult, shadowResult +
+			vec3(0.0, 0.0, -1.0), vec3(0.0, -1.0, 0.0)));
+
+
+
+
+
+
+
+
+
+
+		if (regen) {
+			// 1. first render to depth map
+			glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
+			glBindFramebuffer(GL_FRAMEBUFFER, depthMapFBO);
+			mainWindow->clearColor(1,1,1, 1.0);
+
+			// Render everything first with the cube depth shader.
+			cubeDepthShader.use();
+			cubeDepthShader.setVec3("lightPos", shadowResult);
+			cubeDepthShader.setFloat("far_plane", far_plane);
+
+			for (unsigned int i = 0; i < 6; ++i)
+				cubeDepthShader.setMat4("shadowMatrices[" + std::to_string(i) + "]", pointShadowTransforms[i]);
+
+
+
+			glBindVertexArray(vao);
+			glEnableVertexAttribArray(0);
+			sandBoxShader.setMat4("model", worldMatrix * translate(scale(u, vec3(2)), vec3(0)));
+			//glDrawArrays(GL_TRIANGLES, 0, MCVertices.size());
+			glDisableVertexAttribArray(0);
+			glBindVertexArray(0);
+
+			// Re-bind frame buffer to default after having written the scene to the depth map
+			glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		mat4 cameraProjection = perspective(radians(camera.Zoom), mainWindow->getAspectRatio(), 0.1f, 300.0f);
+		mat4 cameraView = camera.GetViewMatrix();
+		handleWindowResize(&UIM);
+		mainWindow->clearColor(1,1,1,1.0);
+
+		// Draw coordinate axes drawCoordinateAxes(lx, lineShader, primitiveType, cameraView, cameraProjection);
+
+
+#pragma region Send stuff to the sandbox shader
+		sandBoxShader.use();
+		sandBoxShader.setBool("texturingEnabled", UIM.texturingEnabled);
+		sandBoxShader.setFloat("time", time);
+		sandBoxShader.setVec3("viewPos", camera.GetPosition());
+		sandBoxShader.setVec3("lamp.position", shadowResult);
+		sandBoxShader.setMat4("projection", cameraProjection);
+		sandBoxShader.setMat4("view", cameraView);
+
+		sandBoxShader.setVec3("lamp.ambient", (lightIntensity / 100.0f)* vec3(lightAmbient.x, lightAmbient.y, lightAmbient.z));
+		sandBoxShader.setVec3("lightColor", (lightIntensity / 100.0f)* vec3(lightAmbient.x, lightAmbient.y, lightAmbient.z));
+		sandBoxShader.setVec3("lamp.diffuse", (lightIntensity / 100.0f)*vec3(lightDiffuse.x, lightDiffuse.y, lightDiffuse.z));
+		sandBoxShader.setVec3("lamp.specular", (lightIntensity / 100.0f)*vec3(lightSpecular.x, lightSpecular.y, lightSpecular.z));
+		sandBoxShader.setVec2("attenuation", vec2(linear, quadratic));
+		sandBoxShader.setBool("colorAsLight", true);
+		sandBoxShader.setMat4("model", worldMatrix * PointLight_Transform);
+		uS.Draw(primitiveType, depthCubeMap);
+		sandBoxShader.setBool("colorAsLight", false);
+		sandBoxShader.setBool("overrideColor", true);
+		sandBoxShader.setBool("shadowingEnabled", UIM.shadowingEnabled);
+		sandBoxShader.setFloat("time", time);
+#pragma endregion
+
+
+
+
+		cubeShader.use();
+		cubeShader.setBool("texturingEnabled", UIM.texturingEnabled);
+		cubeShader.setFloat("time", time);
+		cubeShader.setVec3("viewPos", camera.GetPosition());
+		cubeShader.setVec3("lamp.position", shadowResult);
+		cubeShader.setMat4("projection", cameraProjection);
+		cubeShader.setMat4("view", cameraView);
+		cubeShader.setBool("shadowingEnabled", UIM.shadowingEnabled);
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		sandBoxShader.use();
+
+		Material MC_Material = obsidian;
+
+
+
+		sandBoxShader.setVec3("material.ambient", MC_Material.getAmbient());
+		sandBoxShader.setVec3("material.diffuse", MC_Material.getDiffuse());
+		sandBoxShader.setVec3("material.specular", MC_Material.getSpecular());
+
+
+
+
+
+
+
+
+
+		sandBoxShader.setFloat("far", far);
+		sandBoxShader.setFloat("near", near);
+
+
+		sandBoxShader.setMat4("model", worldMatrix * (scale(u, 2.0f*MCResolution)));
+		c.Draw(primitiveType);
+
+		MC_Material = Ruby;
+
+
+
+		sandBoxShader.setVec3("material.ambient", MC_Material.getAmbient());
+		sandBoxShader.setVec3("material.diffuse", MC_Material.getDiffuse());
+		sandBoxShader.setVec3("material.specular", MC_Material.getSpecular());
+
+
+
+
+		// Draw the mesh
+
+
+			sandBoxShader.setVec3("manualColor", vec3(0.11, 0.45, 0.52));
+			sandBoxShader.setBool("isMarchingCubeTerrain", true);
+			sandBoxShader.setInt("diffuseMap",0);
+			sandBoxShader.setInt("shadowMap",1);
+	
+		
+
+				glBindVertexArray(vao);
+				glEnableVertexAttribArray(0);
+				glEnableVertexAttribArray(1);
+				glActiveTexture(GL_TEXTURE0);
+				glBindTexture(GL_TEXTURE_2D, diffuse1);
+				glActiveTexture(GL_TEXTURE1);
+				glBindTexture(GL_TEXTURE_CUBE_MAP, depthCubeMap);
+				glEnableVertexAttribArray(0);
+				glEnableVertexAttribArray(1);
+				glEnableVertexAttribArray(2);
+
+		
+				sandBoxShader.setMat4("model", worldMatrix * translate(scale(u, vec3(2)), vec3(0)));
+				glDrawArrays(GL_TRIANGLES, 0, vc);
+				glBindTexture(GL_TEXTURE_2D, 0);
+				glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+				glDisableVertexAttribArray(2);
+				glDisableVertexAttribArray(1);
+				glDisableVertexAttribArray(0);
+				glBindVertexArray(0);
+	
+
+		
+		/*
+		
+		normalDisplayShader.use();
+		normalDisplayShader.setMat4("projection", cameraProjection);
+		normalDisplayShader.setMat4("view", cameraView);
+		normalDisplayShader.setMat4("model", worldMatrix * translate(scale(u, vec3(3)), vec3(0)));
+		normalDisplayShader.setFloat("time", time);
+
+		glBindVertexArray(vao);
+		glEnableVertexAttribArray(0);
+		glEnableVertexAttribArray(1);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, diffuse2);
+		glActiveTexture(GL_TEXTURE1);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, depthCubeMap);
+		glEnableVertexAttribArray(0);
+		glEnableVertexAttribArray(1);
+		glEnableVertexAttribArray(2);
+
+		glDrawArrays(GL_TRIANGLES, 0, MCVertices.size());
+		glBindTexture(GL_TEXTURE_2D, 0);
+		glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+		glDisableVertexAttribArray(2);
+		glDisableVertexAttribArray(1);
+		glDisableVertexAttribArray(0);
+		glBindVertexArray(0);
+
+		*/
+
+
+		/*
+
+		1. Triangulation table gives u the indices of the edges
+		int [] triangulation = MC.triTable[cubeIndex]);
+
+
+		2. We find the two corner points making up each edge
+		std::vector<vec3> MCVertices;
+
+		for (int edgeIndex : triangulation) {
+			int indexA = MC.cornerIndexFromEdge[edgeIndex][0];
+			int indexB = MC.cornerIndexFromEdge[edgeIndex][1];
+			vec3 vertexPosition = (MC.corners[indexA] + MC.corners[indexB]) / 2.0f;
+			MCVertices.push_back(vertexPosition);
+		}
+		cornerIndexFromEdge[
+
+
+
+		3. We find the midpoint between them
+
+		4. We add that vertex to the list
+
+		5. We draw unindexed
+
+
+		*/
+
+		/*
+		for each (int edgeIndex : triangulation) {
+			// Look up the indices of the corners making up the edge
+			int indexA = cornerIndexFromEdge[edgeIndex][0];
+			int indexB = cornerIndexFromEdge[edgeIndex][1];
+			// Find the midpoint of that edge
+			vec3 vertPos = (cube.corners[indexA] + cube.corners[indexB])/2;
+			// add position to vertex list
+		}
+
+		*/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		ImGui::Render();
+		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+
+		// Process input and its effects
+		glfwPollEvents();
+		UIM.processInput(normalizedSpeed);
+		UIM.processWorldOrientation(normalizedSpeed, worldMatrix, PointLight_Transform);
+
+		// Swap the buffers
+		glfwSwapBuffers(mWind);
+
+	}
+
+	// Properly clean/Delete all of GLFW's resources that were allocated
+	glfwTerminate();
+
+	return -1;
+
+}
+
