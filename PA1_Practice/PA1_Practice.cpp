@@ -528,7 +528,7 @@ void setDensities(MarchingCubeChunk & chunk, vec3 center) {
 		vec3 startPos(x, y, z);
 		for (int i = 0; i < 8; ++i) {
 			vec3 v = startPos + corners2[i].pos;
-			char density = ((int)v.y % 128);//noise(v);
+			char density = noise(v);
 			chunk.functionValues[x - (int)center.x + xMag / 2][y - (int)center.y + yMag / 2][z - (int)center.z + zMag / 2][i] = density;
 		}
 

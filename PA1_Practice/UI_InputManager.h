@@ -82,14 +82,14 @@ public:
 	{
 		// Camera/main character movement
 		if (glfwGetKey(mWind, GLFW_KEY_W) == GLFW_PRESS)
-			camera->Position += .005f * vec3(camera->Front.x,0.0f,camera->Front.z);
+			camera->Position += .005f * vec3(camera->Front);//.x,0.0f,camera->Front.z);
 		if (glfwGetKey(mWind, GLFW_KEY_S) == GLFW_PRESS)
-			camera->Position -= .005f * vec3(camera->Front.x, 0.0f, camera->Front.z);
+			camera->Position -= .005f * vec3(camera->Front);//.x, 0.0f, camera->Front.z);
 		if (glfwGetKey(mWind, GLFW_KEY_D) == GLFW_PRESS)
-			camera->Position += .005f * vec3(camera->Right.x, 0.0f, camera->Right.z);
+			camera->Position += .005f * vec3(camera->Right);// .x, 0.0f, camera->Right.z);
 
 		if (glfwGetKey(mWind, GLFW_KEY_A) == GLFW_PRESS)
-			camera->Position -= .005f * vec3(camera->Right.x, 0.0f, camera->Right.z);
+			camera->Position -= .005f * vec3(camera->Right);//.x, 0.0f, camera->Right.z);
 
 
 
@@ -169,7 +169,7 @@ private:
 		if (glfwGetKey(mWind, GLFW_KEY_X) == GLFW_RELEASE) xPressed = false;
 		if (glfwGetKey(mWind, GLFW_KEY_SPACE) == GLFW_PRESS && !spacePressed) {
 			spacePressed = true;
-			camera->Velocity += vec3(0,1,0) * .005f;
+			camera->Velocity += vec3(0,1,0) * .015f;
 			SoundEngine->play2D(jump1, false);
 		}
 		if (glfwGetKey(mWind, GLFW_KEY_SPACE) == GLFW_RELEASE) spacePressed = false;
