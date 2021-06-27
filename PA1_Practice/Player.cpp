@@ -7,7 +7,6 @@ void Player::processMovement(Movement direction, float normalizedSpeed) {
 	if (direction == BACKWARD) {
 		Velocity -=  67.50f*Front * normalizedSpeed;
 	}
-
 }
 
 void Player::update(float dt) {

@@ -52,7 +52,7 @@ using namespace PhysicsUtilities;
 
 // CONSTANT USER SPECIFIED PARAMETER TO DETERMINE MARCHING CUBE VERTEX DENSITY
 
-const float surfaceThreshold = 106;
+const float surfaceThreshold = 122;
 
 /////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////
@@ -78,7 +78,7 @@ OpenGLWindow * mainWindow = new OpenGLWindow(SCR_WIDTH, SCR_HEIGHT);
 GLFWwindow * mWind = mainWindow->glWindow();
 
 Player player;
-Camera camera(mainWindow, player, vec3(0, 3, 6));
+Camera camera(mainWindow, vec3(0, 3, 6));
 
 // Define the world matrix
 mat4 worldMatrix(scale(vec3(1.0f)));
@@ -87,7 +87,8 @@ mat4 worldMatrix(scale(vec3(1.0f)));
 using namespace irrklang;
 ISoundEngine *SoundEngine = createIrrKlangDevice();
 ISoundSource * musicArea1 = SoundEngine->addSoundSourceFromFile("../Audio/synth.mp3");
-ISoundSource * thud1 = SoundEngine->addSoundSourceFromFile("../Audio/thud1.wav");
+ISoundSource * grunt1 = SoundEngine->addSoundSourceFromFile("../Audio/grunt1.mp3");
+ISoundSource * step1 = SoundEngine->addSoundSourceFromFile("../Audio/step1.mp3");
 
 #pragma region Load shaders
 // Instantiate the shaders. The shader class takes care of loading them in and checking for compilation errors.
@@ -189,7 +190,43 @@ void renderQuad()
 	glBindVertexArray(0);
 }
 
+void hdrBufferStuff(unsigned int hdrFBO, unsigned int colorBuffers[2], unsigned int rboDepth, unsigned int pingpongFBO[2], unsigned int pingpongColorbuffers[2]) {
 
+	glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+	// create 2 floating point color buffers (1 for normal rendering, other for brightness treshold values)
+	for (unsigned int i = 0; i < 2; i++)
+	{
+		glBindTexture(GL_TEXTURE_2D, colorBuffers[i]);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+		// attach texture to framebuffer
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, colorBuffers[i], 0);
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+
+	glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+	// tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
+	unsigned int attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+	glDrawBuffers(2, attachments);
+
+	// tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	// ping-pong-framebuffer for blurring
+	for (unsigned int i = 0; i < 2; i++)
+	{
+		glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[i]);
+		glBindTexture(GL_TEXTURE_2D, pingpongColorbuffers[i]);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pingpongColorbuffers[i], 0);
+	}
+
+	glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+
+}
 
 
 void handleWindowResize(UI_InputManager * UIM) {
@@ -476,7 +513,7 @@ float * vertices;
 const uint8_t xMag = 6;
 const uint8_t yMag = 6;
 const uint8_t zMag = 6;
-const float chunkScale = 100.0f;
+const float chunkScale = 1;
 
 vec3 MCResolution(xMag, yMag, zMag);
 
@@ -484,15 +521,17 @@ vec3 MCResolution(xMag, yMag, zMag);
 // We are assuming there are a maximum of 4 triangular faces in an XYZ cube coordinate
 
 
-
 void setDensities(MarchingCubeChunk & chunk, vec3 center) {
 	chunk.center = center; 
+	int numDensities = 0;
 	for (int x = (int)center.x - xMag / 2; x < (int)center.x + xMag / 2; ++x) for (int y = (int)center.y - yMag / 2; y < (int)center.y + yMag / 2; ++y) for (int z = (int)center.z - zMag / 2; z < (int)center.z + zMag / 2; ++z) {
 		vec3 startPos(x, y, z);
 		for (int i = 0; i < 8; ++i) {
-			char density = noise(startPos + corners2[i].pos);
+			vec3 v = startPos + corners2[i].pos;
+			char density = ((int)v.y % 128);//noise(v);
 			chunk.functionValues[x - (int)center.x + xMag / 2][y - (int)center.y + yMag / 2][z - (int)center.z + zMag / 2][i] = density;
 		}
+
 	}
 }
 
@@ -581,7 +620,7 @@ void marchCubes(MarchingCubeChunk & chunk, vec3 center, float surfaceThreshold, 
 					crystCount++;
 					quat rotatesModelToSurfaceNormal;
 					vec3 a = vec3(0, 0, 1);
-					float flipDot = dot(player.Front, faceNormal);
+					float flipDot = dot(camera.Front, faceNormal);
 
 					vec3 b = normalize(flipDot >= 0 ? -faceNormal : faceNormal);
 					vec3 ax = cross(a, b);
@@ -595,7 +634,8 @@ void marchCubes(MarchingCubeChunk & chunk, vec3 center, float surfaceThreshold, 
 					quat movesModelToSurface2 = slerp(identity, rotatesModelToSurfaceNormal, 1.0f);
 
 					chunk.crystalTransforms.push_back(translate(b3d) * rotMat);
-					vec3 lightCol(noise(vec3(b3d.x,b3d.z,b3d.y)),noise(vec3(b3d.z,b3d.y,b3d.z)), noise(vec3(b3d.y,b3d.z,b3d.y)));
+					//vec3 lightCol(noise(vec3(b3d.x,b3d.z,b3d.y)),noise(vec3(b3d.z,b3d.y,b3d.z)), noise(vec3(b3d.y,b3d.z,b3d.y)));
+					vec3 lightCol(0.64, 0.34, 0.72);
 					glm::vec2 atten(linear, quadratic);
 					chunk.crystalLights.push_back(Shader::PointLight{ b3d, lightCol, lightCol, lightCol, atten, 100.0f });
 
@@ -842,7 +882,7 @@ int main() {
 #pragma endregion
 
 #pragma region Instantiate our resource and input managers
-	UI_InputManager UIM(mWind, player, &camera);
+	UI_InputManager UIM(mWind, player, &camera, SoundEngine);
 
 #pragma endregion
 
@@ -865,7 +905,7 @@ int main() {
 	ImVec4 lightAmbient = ImVec4(0.044f, .078f, .171f, 1.0f);
 	ImVec4 lightDiffuse = ImVec4(0.209f, 0.209f, 0.629f, 1.0f);
 	ImVec4 lightSpecular = ImVec4(0.0f, 0.0f, 0.1f, 1.0f);
-	float far = 960.0f, near = 1.0f;
+	float far = 5.0f, near = 0.001f;
 	float lightIntensity = 300.0f;
 	
 	float waveSpread = 10, waveMagnitude = 3;
@@ -878,7 +918,7 @@ int main() {
 
 
 	// Variables for debugging environment
-	bool applyTest1 = true, applyTest2 = true;
+	bool applyTest1 = false, applyTest2 = false;
 
 	//////////////////////////////////////////////////////////////////
 #pragma endregion
@@ -1042,7 +1082,7 @@ int main() {
 	bloomFinalShader.setInt("scene", 0);
 	bloomFinalShader.setInt("bloomBlur", 1);
 
-		vec3 nearestChunkCenter = getNearestChunkCenter(player.Position, chunkScale);
+		vec3 nearestChunkCenter = getNearestChunkCenter(camera.Position, chunkScale);
 
 
 	
@@ -1113,18 +1153,11 @@ int main() {
 				ImGui::Text("Metrics");
 				ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / FPS, FPS);
 			}
-
-
-
 			ImGui::End();
-		
-
-
 		}
 
 		// Make sure we arent zooming, panning, tilting when the user is clicking in the GUI window.
 		if (ImGui::GetIO().WantCaptureMouse && ImGui::GetIO().MouseClicked) {
-			UIM.modelsMoved = true;
 			UIM.hoveringOnGUI = true;
 		}
 		else UIM.hoveringOnGUI = false;
@@ -1141,81 +1174,24 @@ int main() {
 		handleWindowResize(&UIM);
 
 
-		float waterDensity = player.getPosition().y >= 0 ? player.getPosition().y : 0;
+		float waterDensity = camera.Position.y >= 0 ? camera.Position.y : 0;
 		float ncwf = 0.1f*waterDensity / 10000.0f;// Natural Water Color Factor (dependent on player position in Y)
-		float distanceFromSurface = 10000.0f - player.getPosition().y;
+		float distanceFromSurface = 10000.0f - camera.Position.y;
 
 		float quadraticSunlightAttenuation = 1.0f / (1.0f + LSLAF * distanceFromSurface + QSLAF * (distanceFromSurface * distanceFromSurface));
-		vec3 currentDistantWaterColor = vec3(0, 0.01333, 0.04) + vec3(0, ncwf / 3.0, ncwf); currentDistantWaterColor *= quadraticSunlightAttenuation;
-
+		vec3 currentDistantWaterColor = vec3(0.21, 0.733, 0.94) + vec3(0, ncwf / 3.0, ncwf); currentDistantWaterColor *= quadraticSunlightAttenuation;
 
 		Shader::ViewClipPlane VCP{ far, near };
 		Shader::CameraViewInfo CVI{ camera.GetPosition(), cameraProjection, cameraView, currentDistantWaterColor };
-		Shader::UserInputDefinedVariables UIDV{ UIM.texturingEnabled, UIM.shadowingEnabled };
+		Shader::UserInputDefinedVariables UIDV{ true, true };
 		Shader::PointLight SunLight{ Sun_Object_Transform[3],vec3(0.05),vec3(0.45),vec3(0.175), vec2(linear, quadratic), 100.0f };
 
 
 		float deltaT = cFrame - prevFrame;
 		mainWindow->clearColor(vec4(gammaCorrect(currentDistantWaterColor, 2.2), 1.0));
 
+		hdrBufferStuff(hdrFBO,colorBuffers,rboDepth,pingpongFBO,pingpongColorbuffers);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-		glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
-		// create 2 floating point color buffers (1 for normal rendering, other for brightness treshold values)
-		for (unsigned int i = 0; i < 2; i++)
-		{
-			glBindTexture(GL_TEXTURE_2D, colorBuffers[i]);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
-			// attach texture to framebuffer
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, colorBuffers[i], 0);
-		}
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-
-
-
-		glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
-		glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
-		glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
-		// tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
-		unsigned int attachments[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-		glDrawBuffers(2, attachments);
-
-		// tell OpenGL which color attachments we'll use (of this framebuffer) for rendering 
-		glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-		// ping-pong-framebuffer for blurring
-		for (unsigned int i = 0; i < 2; i++)
-		{
-			glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[i]);
-			glBindTexture(GL_TEXTURE_2D, pingpongColorbuffers[i]);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
-			glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pingpongColorbuffers[i], 0);
-		}
-
-		glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
-		glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
 
 		masterWorldShader.prepare(CVI, VCP, UIDV, SunLight);
 		masterWorldShader.setModelMatrix(worldMatrix * scale(Sun_Object_Transform, vec3(1)));
@@ -1224,23 +1200,11 @@ int main() {
 		masterWorldShader.setBool("overrideColor", false);
 		masterWorldShader.setMaterial(obsidian);
 
-		// Draw the mesh
-		marchingCubesShader.prepare(CVI, VCP, UIDV, SunLight);
-		marchingCubesShader.setBool("isFadeableObject", true);
-		marchingCubesShader.setInt("texture_diffuse", 0);
-		marchingCubesShader.setInt("shadowMap", 1);
-		marchingCubesShader.setMaterial("baseMaterial", blueRubber);
-
-
-		marchingCubesShader.setModelMatrix(worldMatrix);
-		vec3 oldChunkCenter = nearestChunkCenter;
-		nearestChunkCenter = getNearestChunkCenter(player.Position, chunkScale);
-
-
-		SWAP_INFO chunkSwapInfo = findChunksToSwap(oldChunkCenter, nearestChunkCenter, chunkScale, chunksToSwap, chunks);
 	
+		vec3 oldChunkCenter = nearestChunkCenter;
+		nearestChunkCenter = getNearestChunkCenter(camera.Position, chunkScale);
+		SWAP_INFO chunkSwapInfo = findChunksToSwap(oldChunkCenter, nearestChunkCenter, chunkScale, chunksToSwap, chunks);
 		if (!chunksToSwap.empty()) {
-
 			// 1. Calculate densities for the new positions in chunks to swap
 
 			for (int i = 0; i < chunksToSwap.size(); ++i) {
@@ -1270,31 +1234,33 @@ int main() {
 				}
 				chunksToSwap[i]->center += offset;
 				setDensities(*chunksToSwap[i], chunksToSwap[i]->center);
-
 				// 2. Set the vertices
 				marchCubes(*chunksToSwap[i], chunksToSwap[i]->center, surfaceThreshold);
-
 				// 3. push to the gpu
 				marchCubesToGPU(*chunksToSwap[i]);
 			}
-
-		
 			chunksToSwap.clear();
 		}
 
 
 		MarchingCubeChunk & curChunk = currentChunk(nearestChunkCenter, chunks);
+		// Draw the mesh
+		marchingCubesShader.prepare(CVI, VCP, UIDV, SunLight);
+		marchingCubesShader.setBool("isFadeableObject", true);
+		marchingCubesShader.setInt("texture_diffuse", 0);
+		marchingCubesShader.setInt("shadowMap", 1);
+		marchingCubesShader.setMaterial("baseMaterial", blueRubber);
+		marchingCubesShader.setModelMatrix(worldMatrix);
 
-		// DRAW ALL CHUNKS OF TERRAIN AND CRYSTAL LIGHTS CONTAINED WITHIN THEM
+		
 		for (int x = -1; x <= 1; ++x) {
 			for (int y = -1; y <= 1; ++y) {
 				for (int z = -1; z <= 1; ++z) {
 					marchingCubesShader.use();
 					marchingCubesShader.setCrystalLights(chunks[x + 1][y + 1][z + 1].crystalLights);
 					marchingCubesShader.setFloat("NUM_CRYSTALS_IN_CHUNK", (float) chunks[x + 1][y + 1][z + 1].crystalLights.size());
-
 					chunks[x + 1][y + 1][z + 1].Draw(&chunks[x+1][y+1][z+1] == &curChunk ? primitiveType : primitiveType, tileTextureID1, depthCubeMap);
-
+					
 					/*
 					crystalLightShader.prepare(CVI, VCP, UIDV);
 					crystalLightShader.setMaterial(esmeralda);
@@ -1302,7 +1268,7 @@ int main() {
 					for (int i = 0; i < chunks[x + 1][y + 1][z + 1].crystalTransforms.size(); ++i) {
 						chunks[x + 1][y + 1][z + 1].crystalLights[i].attenuation  = vec2(linear, quadratic);
 
-						crystalLightShader.setMat4("model", chunks[x+1][y+1][z+1].crystalTransforms[i]);
+						crystalLightShader.setMat4("model", glm::scale(chunks[x+1][y+1][z+1].crystalTransforms[i],glm::vec3(0.1f)));
 						crystalLightShader.setPointLights(chunks[x + 1][y + 1][z + 1].crystalLights[i]);
 						crystalModel.Render(primitiveType, crystalLightShader);
 					}
@@ -1328,67 +1294,15 @@ int main() {
 				}
 			}
 		}
-
+		
 
 		marchingCubesShader.setBool("isFadeableObject", false);
+		//camera.Position = player.getPosition();// -5.0f * camera.Front; // vec3(0, 0, 5);
+		
 
-		//player.rotateQuaternionTowards(camera.rt,camera.Front, camera.Up);
-		player.update(deltaT);
-		// Tell the shader about the main player model
-		quat quaternionWorldMatrix(worldMatrix);
-		camera.Position = player.getPosition() - 5.0f*camera.Front; // vec3(0, 0, 5);
-		mat4 rotmat(1.0f);
+		
 
-		//Calculate the quaternion q that moves A to B, and interpolate q with the 
-		//identity quaternion I using SLERP.The resulting quaternion qNew can then be applied on A.
-		quat identity(vec3(0.0f));
-		quat movesAToB;
-		vec3 a = player.Front;
-		vec3 b = camera.Front;
-
-		vec3 ax = cross(a, b);
-		movesAToB.x = ax.x;
-		movesAToB.y = ax.y;
-		movesAToB.z = ax.z;
-		movesAToB.w = sqrt((length(a) * length(a)) * (length(b) * length(b))) + dot(a, b);
-		quat movesAToBNew = slerp(identity, movesAToB, 0.0125f);
-
-		quat movesAToB2;
-		vec3 a2 = player.Up;
-		vec3 b2 = camera.Up;
-
-		vec3 ax2 = cross(a2, b2);
-		movesAToB2.x = ax2.x;
-		movesAToB2.y = ax2.y;
-		movesAToB2.z = ax2.z;
-		movesAToB2.w = sqrt((length(a2) * length(a2)) * (length(b2) * length(b2))) + dot(a2, b2);
-		quat movesAToBNew2 = slerp(identity, movesAToB2, 0.0125f);
-
-		player.Front = toMat4(movesAToBNew) * vec4(player.Front, 1.0f);
-		player.WorldUp = vec3(toMat4(movesAToBNew2) * vec4(player.WorldUp, 1.0f));
-
-
-		importedModelShader.prepare(CVI, VCP, UIDV, SunLight);
-		importedModelShader.setMat4("model", (player.getModelMatrix(1.0f)));
-		importedModelShader.setMaterial("baseMaterial", blueRubber);
-
-		if (UIM.switchedPlayerModel) {
-			player.linkModel(UIM.animatePlayerModel ? &sharkModel : &submarineModel);
-			UIM.switchedPlayerModel = false;
-		}
-
-		// Set Crystal light uniforms
-		importedModelShader.setCrystalLights(curChunk.crystalLights);
-		importedModelShader.setFloat("NUM_CRYSTALS_IN_CHUNK", (float)curChunk.crystalLights.size());
-		player.Render(primitiveType, importedModelShader, UIM.animatePlayerModel, UIM.animatePlayerModel);
-
-		masterWorldShader.use();
-
-
-
-		/*
-
-		vec3 whereWeAre = player.getPosition();
+		vec3 whereWeAre = camera.Position;
 
 		vec3 playerCollisionPosition = vec3((int)round(whereWeAre.x/ chunkScale) - nearestChunkCenter.x + xMag / 2,
 			(int)round(whereWeAre.y / chunkScale) - nearestChunkCenter.y + yMag/2, (int)round(whereWeAre.z / chunkScale) - nearestChunkCenter.z + zMag/2);
@@ -1416,7 +1330,6 @@ int main() {
 			if (chunks[x][y][z].center.x - nearestChunkCenter.x == 6) chunksToCheckForCollision.push_back(&chunks[x][y][z]);
 			if (chunks[x][y][z].center.y - nearestChunkCenter.y == 6) chunksToCheckForCollision.push_back(&chunks[x][y][z]);
 			if (chunks[x][y][z].center.z - nearestChunkCenter.z == 6) chunksToCheckForCollision.push_back(&chunks[x][y][z]);
-
 			if (xNext && yNext) {
 				if (chunks[x][y][z].center - nearestChunkCenter == vec3(6,6,0)) chunksToCheckForCollision.push_back(&chunks[x][y][z]);
 			}		
@@ -1430,113 +1343,64 @@ int main() {
 
 		int collisions = 0;
 
-		vec3 collisionChunkIndices = getCollisionChunkIndices(player.Position, nearestChunkCenter, chunkScale);
-
+		vec3 collisionChunkIndices = getCollisionChunkIndices(camera.Position, nearestChunkCenter, chunkScale);
 		for (int i = 0; i < 5; i++) {
 			std::vector<MarchingCubeChunk::face> facesToCheck;
-			for (MarchingCubeChunk * MCC : chunksToCheckForCollision) facesToCheck.push_back(MCC->faces[((((int)playerCollisionPosition.x)*xMag + ((int)playerCollisionPosition.y))*yMag +
+			for (MarchingCubeChunk * MCC : chunksToCheckForCollision) 
+				facesToCheck.push_back(MCC->faces[((((int)playerCollisionPosition.x)*xMag + ((int)playerCollisionPosition.y))*yMag +
 				((int)playerCollisionPosition.z)) * 5 + i]);
 
 			for (MarchingCubeChunk::face f : facesToCheck)
 				if (distance(f.v3, f.v2) > 0) {
-
-
-					masterWorldShader.setMat4("model", mat4(1.0f));
 					vec3 p1 = whereWeAre;
 					vec2 baryCenter;
 					float distance = 9999999.0f;
 					for (int i = 0; i < collisionCasts.size(); ++i) {
-
-						if (intersectRayTriangle(p1, normalize(collisionCasts[i]), f.v1, f.v2, f.v3, baryCenter, distance) && abs(distance) < 1.50f) {
+						if (intersectRayTriangle(p1, normalize(collisionCasts[i]), f.v1, f.v2, f.v3, baryCenter, distance) && abs(distance) < 0.1f) {
 							collisions++;
-							if (!player.unsolvedCollision)
+							if (!camera.collisionForward)
 							{
-								SoundEngine->play2D(thud1, false);
+								if (length(camera.Velocity) > 1.0f) {
+								//	SoundEngine->play2D(grunt1, false);
+								}
+								SoundEngine->play2D(step1, false);
+								camera.collisionForward = true;
+
+								camera.Velocity = vec3(0.0f);
+								break;
+								/*
 								vec3 reflectionDirection;
-								reflectionDirection = (player.Front) - 1.0f*(dot(player.Front, f.normal)) * f.normal;
-								player.Front = normalize(reflectionDirection);
+								reflectionDirection = (camera.Front) - 1.0f*(dot(camera.Front, f.normal)) * f.normal;
+								camera.Front = normalize(reflectionDirection);
 								vec3 halfAngle = cross(reflectionDirection, f.normal);
 
 								if (halfAngle == vec3(0)) {
-									player.Front = normalize(f.normal);
+									camera.Front = normalize(f.normal);
 									player.unsolvedCollision = true;
 								}
 								else {
-									player.Front = normalize(reflectionDirection);
+									camera.Front = normalize(reflectionDirection);
 									player.unsolvedCollision = true;
 								}
+								*/
 							}
 							break;
 						}
 
-
-						float crystIntersectDist = 99999999.0f;
-						if (curChunk.crystalPosition != vec3(0)) {
-							bool intersectChunksCrystal = intersectRaySphere(p1, normalize(collisionCasts[i]), curChunk.crystalPosition + curChunk.crystalFaceNormal * 4.0f, 100.0f, crystIntersectDist);
-							if (abs(crystIntersectDist < 1.50f)) {
-								collisions++;
-								if (!player.unsolvedCollision)
-								{
-									SoundEngine->play2D(thud1, false);
-									vec3 reflectionDirection;
-									reflectionDirection = -(player.Front);
-									player.Front = normalize(reflectionDirection);
-									vec3 halfAngle = cross(reflectionDirection, f.normal);
-
-									if (halfAngle == vec3(0)) {
-										player.Front = normalize(f.normal);
-										player.unsolvedCollision = true;
-									}
-									else {
-										player.Front = normalize(reflectionDirection);
-										player.unsolvedCollision = true;
-									}
-								}
-							}
-						}
-
-						// IF we are in the center chunk which contains the models, check for collisions with them.
-
-						if (curChunk.center == vec3(0)) {
-							float playerModelIntersectionDist = 99999999.0f;
-							for (int k = 0; k < 5; ++k) {
-
-								if (playerModelPositions[k] == vec3(0)) continue;
-								bool intersectPlayerModel = intersectRaySphere(p1, normalize(collisionCasts[i]), playerModelPositions[k] + playerModelFaceNormals[k] * 9.0f, 81.0f, playerModelIntersectionDist);
-								if (abs(playerModelIntersectionDist < 1.50f)) {
-									collisions++;
-									if (!player.unsolvedCollision)
-									{
-										SoundEngine->play2D(thud1, false);
-										vec3 reflectionDirection;
-										reflectionDirection = -(player.Front);
-										player.Front = normalize(reflectionDirection);
-										vec3 halfAngle = cross(reflectionDirection, f.normal);
-
-										if (halfAngle == vec3(0)) {
-											player.Front = normalize(f.normal);
-											player.unsolvedCollision = true;
-										}
-										else {
-											player.Front = normalize(reflectionDirection);
-											player.unsolvedCollision = true;
-										}
-									}
-								}
-							}
-						}
+						
 					}
 
 			}
 
 
 
-		if (collisions == 0) player.unsolvedCollision = false;
 
 		}
+		if (camera.collisionForward && collisions == 0) camera.collisionForward = false;
 
 		chunksToCheckForCollision.clear();
-		*/
+		camera.update(deltaT);
+
 
 
 
@@ -1588,7 +1452,6 @@ int main() {
 		// Process input and its effects
 		glfwPollEvents();
 		UIM.processInput(normalizedSpeed);
-		UIM.processWorldOrientation(normalizedSpeed, worldMatrix, Sun_Object_Transform);
 
 		// Swap the buffers
 		glfwSwapBuffers(mWind);

@@ -3657,7 +3657,8 @@ void ImGui::NewFrame()
     ImGuiContext& g = *GImGui;
 
 #ifdef IMGUI_ENABLE_TEST_ENGINE
-    ImGuiTestEngineHook_PreNewFrame(&g);
+    ImGuiTestEngineHook_P
+        Frame(&g);
 #endif
 
     // Check and assert for various common IO and Configuration mistakes

@@ -159,7 +159,6 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="Boid.h" />
     <ClInclude Include="Camera.h" />
     <ClInclude Include="Cube.h" />
     <ClInclude Include="Grid.h" />
@@ -193,7 +192,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="3DMathUtils.cpp" />
-    <ClCompile Include="Boid.cpp" />
     <ClCompile Include="Cube.cpp" />
     <ClCompile Include="Grid.cpp" />
     <ClCompile Include="HierarchicalModel.cpp" />

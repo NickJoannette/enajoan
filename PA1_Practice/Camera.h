@@ -18,15 +18,14 @@
 
 // Default orientations
 const float YAW = -90.0f;
-const float PITCH = -glm::degrees(atanf(3.0f / 6.0f));
-const float SPEED = 20.0f;
+const float PITCH = 0.0f;
+const float SPEED = 10.0f;
 const float SENSITIVITY = 1.0;
-const float ZOOM = 95.00f;
+const float ZOOM = 30.0f;
 
 class Camera
 {
 public:
-	Player & player;
 	OpenGLWindow * mainWindow;
 
 	// COLLISION TEMP VARIABLES
@@ -50,14 +49,48 @@ public:
 	float ZoomSensitivity = 0.5f;
 	float Zoom;
 
+	glm::vec3 Velocity;
+	glm::vec3 Acceleration;
+
+	void update(float dt) {
+		Acceleration = collisionForward ? vec3(0) : -0.0001f * vec3(0,1,0);
+		Velocity += Acceleration;
+		Position += Velocity;
+		Acceleration = vec3(0.0f);
+	}
+
+	void processMovement(Movement direction, float normalizedSpeed) {
+		if (direction == FORWARD) {
+			Velocity = 0.50f*Front * normalizedSpeed;
+		}
+		if (direction == BACKWARD) {
+			Velocity = -0.50f *Front * normalizedSpeed;
+		}
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 	// Constructor with vectors
-	Camera(OpenGLWindow * mainwindow, Player & player, glm::vec3 position = glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f), float yaw = YAW, float pitch = PITCH) : player(player), Front(glm::vec3(0.0f, -.450f, -.9f)), MovementSpeed(SPEED), Zoom(ZOOM)
+	Camera(OpenGLWindow * mainwindow,  glm::vec3 position = glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f), 
+		float yaw = YAW, float pitch = PITCH) : Front(glm::vec3(0.0f, -.450f, -.9f)), MovementSpeed(SPEED), Zoom(ZOOM)
 	{
 		Position = position;
 		WorldUp = up;
 		mainWindow = mainwindow;
 		updateView();
-		UpdateProjection(1.0f, 500.0f);
+		UpdateProjection(0.001f, 5);
 	}
 
 	// Third person camera functions...
@@ -66,7 +99,7 @@ public:
 
 	// Returns the camera's view matrix using glm::lookAt
 	glm::mat4 GetViewMatrix(){
-		return lookAt(Position, player.getPosition() + Front, Up);
+		return lookAt(Position, Position + Front, Up);
 	}
 
 	glm::mat4 * GetProjectionMatrix() { return &projection; }
@@ -118,15 +151,6 @@ public:
 		std::cout << "Front: (" << Front.x << ", " << Front.y << ", " << Front.z << ")" << std::endl;
 	}
 
-
-
-
-
-
-
-
-
-
 	void ProcessTilt(float tiltQty)
 	{
 		vec3 axis = cross(Up, Front);
@@ -173,7 +197,6 @@ public:
 		WorldUp = vec3(toMat4(rt) * vec4(WorldUp, 1.0f));
 		Right = glm::normalize(glm::cross(Front, WorldUp));
 		Up = glm::normalize(glm::cross(Right, Front));
-		//p->Up = Up;
 	}
 
 private:
